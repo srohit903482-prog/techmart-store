@@ -1,167 +1,173 @@
-const express = require("express");
-const cors = require("cors");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const pool = require("./db");
-require("dotenv").config();
-
+const express = require('express');
+const cors = require('cors');
 const app = express();
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
+// Sample products data (computers, laptops, printers, accessories, software)
+const products = [
+  { id: 1, name: 'Dell XPS 15', category: 'Laptops', price: 1299, stock: 10, image: 'laptop1' },
+  { id: 2, name: 'MacBook Pro 14', category: 'Laptops', price: 1999, stock: 5, image: 'laptop2' },
+  { id: 3, name: 'HP Spectre x360', category: 'Laptops', price: 1199, stock: 8, image: 'laptop3' },
+  { id: 4, name: 'Dell OptiPlex Desktop', category: 'Computers', price: 899, stock: 15, image: 'desktop1' },
+  { id: 5, name: 'HP Elite Desktop', category: 'Computers', price: 1099, stock: 12, image: 'desktop2' },
+  { id: 6, name: 'HP LaserJet Pro', category: 'Printers', price: 399, stock: 7, image: 'printer1' },
+  { id: 7, name: 'Epson EcoTank', category: 'Printers', price: 499, stock: 6, image: 'printer2' },
+  { id: 8, name: 'Logitech MX Master 3S', category: 'Accessories', price: 89, stock: 20, image: 'mouse' },
+  { id: 9, name: 'Logitech Mechanical Keyboard', category: 'Accessories', price: 129, stock: 15, image: 'keyboard' },
+  { id: 10, name: 'Microsoft Office 2024', category: 'Software', price: 149, stock: 50, image: 'office' },
+  { id: 11, name: 'Adobe Creative Cloud', category: 'Software', price: 599, stock: 30, image: 'adobe' },
+  { id: 12, name: 'Dell 27" Monitor', category: 'Accessories', price: 249, stock: 18, image: 'monitor' }
+];
+
+// Temporary in-memory cart (will reset on server restart)
+let carts = {};
+
+// ============ API ENDPOINTS ============
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ message: 'TechMart API is running!', endpoints: ['/api/products', '/api/cart', '/api/auth/register', '/api/auth/login'] });
+});
+
+// Get all products
+app.get('/api/products', (req, res) => {
+  res.json(products);
+});
+
+// Get single product by ID
+app.get('/api/products/:id', (req, res) => {
+  const product = products.find(p => p.id === parseInt(req.params.id));
+  if (!product) {
+    return res.status(404).json({ message: 'Product not found' });
+  }
+  res.json(product);
+});
+
+// Get products by category
+app.get('/api/products/category/:category', (req, res) => {
+  const categoryProducts = products.filter(p => p.category.toLowerCase() === req.params.category.toLowerCase());
+  res.json(categoryProducts);
+});
+
+// Get cart for a user (using userId from header for demo)
+app.get('/api/cart', (req, res) => {
+  const userId = req.headers['user-id'] || 'default';
+  const userCart = carts[userId] || [];
+  const cartItems = userCart.map(item => ({
+    ...item,
+    product: products.find(p => p.id === item.productId)
+  }));
+  res.json({ items: cartItems, total: cartItems.reduce((sum, item) => sum + (item.product?.price || 0) * item.quantity, 0) });
+});
+
+// Add to cart
+app.post('/api/cart', (req, res) => {
+  const { productId, quantity = 1 } = req.body;
+  const userId = req.headers['user-id'] || 'default';
+  
+  if (!carts[userId]) carts[userId] = [];
+  
+  const existingItem = carts[userId].find(item => item.productId === productId);
+  
+  if (existingItem) {
+    existingItem.quantity += quantity;
+  } else {
+    carts[userId].push({ productId, quantity });
+  }
+  
+  res.json({ message: 'Added to cart', cart: carts[userId] });
+});
+
+// Remove from cart
+app.delete('/api/cart/:productId', (req, res) => {
+  const userId = req.headers['user-id'] || 'default';
+  const productId = parseInt(req.params.productId);
+  
+  if (carts[userId]) {
+    carts[userId] = carts[userId].filter(item => item.productId !== productId);
+  }
+  
+  res.json({ message: 'Removed from cart' });
+});
+
+// Update cart quantity
+app.put('/api/cart/:productId', (req, res) => {
+  const { quantity } = req.body;
+  const userId = req.headers['user-id'] || 'default';
+  const productId = parseInt(req.params.productId);
+  
+  if (carts[userId]) {
+    const item = carts[userId].find(item => item.productId === productId);
+    if (item) {
+      item.quantity = quantity;
+      if (quantity <= 0) {
+        carts[userId] = carts[userId].filter(i => i.productId !== productId);
+      }
+    }
+  }
+  
+  res.json({ message: 'Cart updated' });
+});
+
+// User registration (simple version)
+app.post('/api/auth/register', (req, res) => {
+  const { email, password, name } = req.body;
+  // In production, save to database. For demo, just return success
+  res.json({ 
+    message: 'Registration successful', 
+    token: 'demo-token-12345',
+    user: { id: Date.now(), email, name }
+  });
+});
+
+// User login (simple version)
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body;
+  // In production, verify credentials. For demo, accept anything
+  res.json({ 
+    message: 'Login successful', 
+    token: 'demo-token-12345',
+    user: { id: Date.now(), email, name: email.split('@')[0] }
+  });
+});
+
+// Create order (checkout)
+app.post('/api/orders', (req, res) => {
+  const userId = req.headers['user-id'] || 'default';
+  const { shippingAddress, paymentMethod } = req.body;
+  
+  const userCart = carts[userId] || [];
+  const orderItems = userCart.map(item => ({
+    productId: item.productId,
+    quantity: item.quantity,
+    product: products.find(p => p.id === item.productId)
+  }));
+  
+  const total = orderItems.reduce((sum, item) => sum + (item.product?.price || 0) * item.quantity, 0);
+  
+  // Clear cart after order
+  carts[userId] = [];
+  
+  res.json({
+    message: 'Order created successfully',
+    order: {
+      id: Date.now(),
+      items: orderItems,
+      total,
+      shippingAddress,
+      paymentMethod,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    }
+  });
+});
+
+// Start server
 const PORT = process.env.PORT || 5000;
-
-/* ================= AUTH MIDDLEWARE ================= */
-const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "No token" });
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
-    res.status(401).json({ error: "Invalid token" });
-  }
-};
-
-/* ================= AUTH ROUTES ================= */
-app.post("/api/signup", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const hash = await bcrypt.hash(password, 10);
-
-    const user = await pool.query(
-      "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
-      [email, hash]
-    );
-
-    res.json(user.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    const user = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
-      [email]
-    );
-
-    if (user.rows.length === 0)
-      return res.status(400).json({ error: "User not found" });
-
-    const valid = await bcrypt.compare(
-      password,
-      user.rows[0].password_hash
-    );
-
-    if (!valid)
-      return res.status(400).json({ error: "Invalid password" });
-
-    const token = jwt.sign(
-      { id: user.rows[0].id },
-      process.env.JWT_SECRET,
-      { expiresIn: "1d" }
-    );
-
-    res.json({ token });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* ================= PRODUCTS ================= */
-app.get("/api/products", async (req, res) => {
-  try {
-    const products = await pool.query("SELECT * FROM products");
-    res.json(products.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* ================= CART ================= */
-app.get("/api/cart", authMiddleware, async (req, res) => {
-  try {
-    const cart = await pool.query(
-      `SELECT cart_items.id, products.name, products.price, cart_items.quantity
-       FROM cart_items
-       JOIN products ON cart_items.product_id = products.id
-       WHERE cart_items.user_id = $1`,
-      [req.user.id]
-    );
-    res.json(cart.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/cart", authMiddleware, async (req, res) => {
-  try {
-    const { product_id, quantity } = req.body;
-
-    const item = await pool.query(
-      `INSERT INTO cart_items (user_id, product_id, quantity)
-       VALUES ($1, $2, $3) RETURNING *`,
-      [req.user.id, product_id, quantity]
-    );
-
-    res.json(item.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete("/api/cart/:id", authMiddleware, async (req, res) => {
-  try {
-    await pool.query(
-      "DELETE FROM cart_items WHERE id = $1 AND user_id = $2",
-      [req.params.id, req.user.id]
-    );
-    res.json({ message: "Item removed" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* ================= ORDERS ================= */
-app.post("/api/orders", authMiddleware, async (req, res) => {
-  try {
-    const cart = await pool.query(
-      `SELECT products.price, cart_items.quantity
-       FROM cart_items
-       JOIN products ON cart_items.product_id = products.id
-       WHERE cart_items.user_id = $1`,
-      [req.user.id]
-    );
-
-    let total = 0;
-    cart.rows.forEach(item => {
-      total += item.price * item.quantity;
-    });
-
-    const order = await pool.query(
-      `INSERT INTO orders (user_id, total, status)
-       VALUES ($1, $2, 'completed') RETURNING *`,
-      [req.user.id, total]
-    );
-
-    await pool.query(
-      "DELETE FROM cart_items WHERE user_id = $1",
-      [req.user.id]
-    );
-
-    res.json(order.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* ================= SERVER ================= */
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Test the API: http://localhost:${PORT}/api/products`);
 });
